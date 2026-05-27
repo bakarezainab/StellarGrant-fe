@@ -14,67 +14,59 @@ interface Notification {
 }
 
 /**
- * Custom toast event emitted by hooks (e.g. useVoting) that need to
- * show a toast without going through the WebSocket.
- *
+ * Custom toast event consumed by this component.
  * Dispatch via:
- *   window.dispatchEvent(
- *     new CustomEvent<ToastEventDetail>("stellar:toast", { detail })
- *   );
+ *   window.dispatchEvent(new CustomEvent<ToastEventDetail>("stellar:toast", { detail }))
  */
 export interface ToastEventDetail {
   type: string;
   title: string;
   message: string;
-  /** Optional href rendered as a small "View →" link inside the toast */
   href?: string;
 }
 
-// ─── Icon helper ────────────────────────────────────────────────────────────
+// ─── Icon helper ─────────────────────────────────────────────────────────────
 
 function ToastIcon({ type }: { type: string }) {
   switch (type) {
-    case "grant_created":
-      return <Info className="text-blue-400" size={20} />;
-    case "grant_updated":
-      return <CheckCircle className="text-green-400" size={20} />;
-    case "milestone_submitted":
-      return <Rocket className="text-orange-400" size={20} />;
-    case "vote_recorded":
-      return <CheckCircle className="text-green-400" size={20} />;
-    case "vote_error":
-      return <AlertCircle className="text-red-400" size={20} />;
-    default:
-      return <Bell className="text-purple-400" size={20} />;
+    case "grant_created":       return <Info className="text-blue-400" size={20} />;
+    case "grant_updated":       return <CheckCircle className="text-green-400" size={20} />;
+    case "milestone_submitted": return <Rocket className="text-orange-400" size={20} />;
+    case "vote_recorded":       return <CheckCircle className="text-green-400" size={20} />;
+    case "vote_error":          return <AlertCircle className="text-red-400" size={20} />;
+    default:                    return <Bell className="text-purple-400" size={20} />;
   }
 }
 
-// ─── Socket notification → display helpers ──────────────────────────────────
+// ─── Socket notification → ToastEventDetail helpers ──────────────────────────
 
-function getSocketTitle(type: string): string {
-  switch (type) {
-    case "grant_created":       return "New Grant Created";
-    case "grant_updated":       return "Grant Updated";
-    case "milestone_submitted": return "Milestone Submitted";
-    default:                    return "Notification";
-  }
-}
-
-function getSocketMessage(notification: Notification): string {
-  const { type, payload } = notification;
+function toastDetailFromNotification(n: Notification): ToastEventDetail {
+  const { type, payload } = n;
   switch (type) {
     case "grant_created":
-      return `Grant "${payload.title}" has been successfully registered on-chain.`;
+      return {
+        type,
+        title:   "New Grant Created",
+        message: `Grant "${payload.title}" has been successfully registered on-chain.`,
+      };
     case "grant_updated":
-      return `Grant "${payload.title}" status changed from ${payload.oldStatus} to ${payload.newStatus}.`;
+      return {
+        type,
+        title:   "Grant Updated",
+        message: `Grant "${payload.title}" status changed from ${payload.oldStatus} to ${payload.newStatus}.`,
+      };
     case "milestone_submitted":
-      return `A new milestone proof has been submitted for Grant #${payload.grantId} (Milestone ${Number(payload.milestoneIdx) + 1}).`;
+      return {
+        type,
+        title:   "Milestone Submitted",
+        message: `A new milestone proof has been submitted for Grant #${payload.grantId} (Milestone ${Number(payload.milestoneIdx) + 1}).`,
+      };
     default:
-      return "You have a new update.";
+      return { type, title: "Notification", message: "You have a new update." };
   }
 }
 
-// ─── Component ──────────────────────────────────────────────────────────────
+// ─── Component ───────────────────────────────────────────────────────────────
 
 interface ActiveToast {
   type: string;
@@ -87,53 +79,46 @@ const AUTO_HIDE_MS = 5000;
 
 export const NotificationToast: React.FC = () => {
   const { lastNotification } = useSocket();
-  const [visible, setVisible] = useState(false);
-  const [current, setCurrent] = useState<ActiveToast | null>(null);
-
-  // Single timer ref — cleared before each new toast so rapid-fire
-  // notifications never leave a stale hide-timer running.
+  const [visible, setVisible]   = useState(false);
+  const [current, setCurrent]   = useState<ActiveToast | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Cleanup on unmount
+  // Cleanup timer on unmount
   useEffect(() => {
-    return () => {
-      if (timerRef.current !== null) clearTimeout(timerRef.current);
-    };
+    return () => { if (timerRef.current !== null) clearTimeout(timerRef.current); };
   }, []);
 
-  // ── 1. Socket-pushed notifications ──────────────────────────────────────
+  // ── Effect 1: bridge socket notification → DOM event ─────────────────────
+  //
+  // The effect body only dispatches to an external system (the DOM event bus)
+  // — it never calls setState directly. This satisfies react-hooks/set-state-in-effect.
   useEffect(() => {
     if (!lastNotification) return;
-
-    if (timerRef.current !== null) clearTimeout(timerRef.current);
-
-    setCurrent({
-      type:    lastNotification.type,
-      title:   getSocketTitle(lastNotification.type),
-      message: getSocketMessage(lastNotification),
-    });
-    setVisible(true);
-
-    timerRef.current = setTimeout(() => setVisible(false), AUTO_HIDE_MS);
+    window.dispatchEvent(
+      new CustomEvent<ToastEventDetail>("stellar:toast", {
+        detail: toastDetailFromNotification(lastNotification),
+      })
+    );
   }, [lastNotification]);
 
-  // ── 2. Custom DOM events (from hooks like useVoting) ─────────────────────
+  // ── Effect 2: listen for stellar:toast events, setState inside callback ───
+  //
+  // setState is called inside handleCustom (a subscribed callback), which is
+  // the pattern explicitly permitted by react-hooks/set-state-in-effect.
   useEffect(() => {
     function handleCustom(e: Event) {
       const { type, title, message, href } =
         (e as CustomEvent<ToastEventDetail>).detail;
 
       if (timerRef.current !== null) clearTimeout(timerRef.current);
-
       setCurrent({ type, title, message, href });
       setVisible(true);
-
       timerRef.current = setTimeout(() => setVisible(false), AUTO_HIDE_MS);
     }
 
     window.addEventListener("stellar:toast", handleCustom);
     return () => window.removeEventListener("stellar:toast", handleCustom);
-  }, []); // stable: timerRef never changes, setCurrent/setVisible are stable
+  }, []); // timerRef, setCurrent, setVisible are all stable — no deps needed
 
   if (!current) return null;
 
