@@ -1,24 +1,36 @@
+"use client";
+
 /**
  * WalletGuard Component
  * 
  * Wrapper component that renders children only when a wallet is connected.
- * Shows a connect prompt otherwise.
+ * Shows a premium connect prompt otherwise.
  */
+
+import { useWalletStore } from "@/lib/store/walletStore";
+import { WalletConnect } from "./WalletConnect";
 
 interface WalletGuardProps {
   children: React.ReactNode;
-  requiredRole?: "any" | "reviewer" | "contributor" | "owner";
 }
 
-export function WalletGuard({ children, requiredRole: _requiredRole = "any" }: WalletGuardProps) {
-  // TODO: Implement wallet guard with role checking
-  const isConnected = false; // This will be connected to useWallet hook
+export function WalletGuard({ children }: WalletGuardProps) {
+  const { address } = useWalletStore();
 
-  if (!isConnected) {
+  if (!address) {
     return (
-      <div className="text-center p-8">
-        <p className="text-muted-foreground mb-4">Please connect your wallet to continue</p>
-        {/* WalletConnect component will be rendered here */}
+      <div className="wallet-guard-prompt max-w-md mx-auto my-16 p-8 border border-warning/40 bg-warning/5 text-center space-y-6">
+        <div className="space-y-2">
+          <h2 className="font-orbitron text-lg font-bold text-warning uppercase tracking-widest">
+            Wallet Disconnected
+          </h2>
+          <p className="font-mono text-xs text-text-muted leading-relaxed">
+            Please connect your Stellar wallet to access the Create Grant builder.
+          </p>
+        </div>
+        <div className="flex justify-center">
+          <WalletConnect />
+        </div>
       </div>
     );
   }

@@ -5,6 +5,7 @@
  * Uses auto-generated TypeScript bindings from the contract ABI.
  */
 
+import { nativeToScVal, xdr } from "@stellar/stellar-sdk";
 import { networkPassphraseConfig } from "./client";
 
 const contractId = process.env.NEXT_PUBLIC_CONTRACT_ID || "";
@@ -59,15 +60,37 @@ export class ContractClient {
   /**
    * Write: Create a new grant
    */
-  async grantCreate(_params: {
+  async grantCreate(params: {
     owner: string;
     title: string;
-    budget: bigint;
-    deadline: bigint;
-    milestones: bigint;
+    description: string;
+    tokenAddress: string;
+    totalAmount: bigint;
+    milestoneAmount: bigint;
+    numMilestones: number;
+    reviewers: string[];
+    quorum: number;
   }) {
-    // TODO: Implement contract method calls
-    throw new Error("Not implemented");
+    return {
+      method: "grant_create",
+      args: [
+        nativeToScVal(params.owner, { type: "address" }),
+        nativeToScVal(params.title),
+        nativeToScVal(params.description),
+        nativeToScVal(params.tokenAddress, { type: "address" }),
+        nativeToScVal(params.totalAmount, { type: "i128" }),
+        nativeToScVal(params.milestoneAmount, { type: "i128" }),
+        nativeToScVal(params.numMilestones, { type: "u32" }),
+        xdr.ScVal.scvVec(params.reviewers.map(r => nativeToScVal(r, { type: "address" }))),
+        nativeToScVal(params.quorum, { type: "u32" }),
+        nativeToScVal(null), // Option<Vec<u64>>
+        nativeToScVal(0n, { type: "i128" }), // min_funding
+        nativeToScVal(params.totalAmount, { type: "i128" }), // hard_cap
+        xdr.ScVal.scvVec([]), // tags
+        nativeToScVal(false), // _is_open_bounty
+        nativeToScVal(false), // is_public_good
+      ]
+    };
   }
 
   /**
