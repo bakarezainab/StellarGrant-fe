@@ -7,7 +7,6 @@
 
 import { nativeToScVal, xdr } from "@stellar/stellar-sdk";
 import { networkPassphraseConfig } from "./client";
-import { nativeToScVal } from "@stellar/stellar-sdk";
 
 const contractId = process.env.NEXT_PUBLIC_CONTRACT_ID || "";
 
