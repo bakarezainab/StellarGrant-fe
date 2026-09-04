@@ -352,9 +352,10 @@ mod tests {
         }
     }
 
-    fn setup() -> (Env, Address, Address, Address) {
+    fn setup() -> (Env, Address, Address, Address, Address) {
         let env = Env::default();
-        env.mock_all_auths();
+        let contract_id = env.register(crate::StellarGrantsContract, ());
+        env.mock_all_auths_allowing_non_root_auth();
         let admin = Address::generate(&env);
         let policyholder = Address::generate(&env);
         let token_admin = Address::generate(&env);
@@ -363,163 +364,219 @@ mod tests {
             .address();
         let stellar_asset = StellarAssetClient::new(&env, &token_contract);
         stellar_asset.mint(&policyholder, &10_000_000);
-        Storage::set_global_admin(&env, &admin);
-        let grant = make_grant(&env, &policyholder, &token_contract, 1);
-        Storage::set_grant(&env, 1, &grant);
-        (env, admin, policyholder, token_contract)
+        env.as_contract(&contract_id, || {
+            Storage::set_global_admin(&env, &admin);
+            let grant = make_grant(&env, &policyholder, &token_contract, 1);
+            Storage::set_grant(&env, 1, &grant);
+        });
+        (env, admin, policyholder, token_contract, contract_id)
     }
 
     #[test]
     fn test_premium_calculated_correctly() {
-        let (env, _admin, policyholder, token) = setup();
-        let coverage = 1_000_000i128;
-        // Expected premium = 1_000_000 * 50 / 10_000 = 5_000
-        let policy = purchase_policy(&env, &policyholder, 1, &token, coverage).unwrap();
-        assert_eq!(policy.premium_paid, 5_000);
-        assert_eq!(pool_balance(&env, &token), 5_000);
+        let (env, _admin, policyholder, token, contract_id) = setup();
+        env.as_contract(&contract_id, || {
+            let coverage = 1_000_000i128;
+            // Expected premium = 1_000_000 * 50 / 10_000 = 5_000
+            let policy = purchase_policy(&env, &policyholder, 1, &token, coverage).unwrap();
+            assert_eq!(policy.premium_paid, 5_000);
+            assert_eq!(pool_balance(&env, &token), 5_000);
+        });
     }
 
     #[test]
     fn test_zero_premium_rejected() {
-        let (env, _admin, policyholder, token) = setup();
-        // coverage_amount <= 199 results in premium = 0 due to integer division
-        // 199 * 50 / 10_000 = 0
-        let coverage = 199i128;
-        let err = purchase_policy(&env, &policyholder, 1, &token, coverage).unwrap_err();
-        assert_eq!(err, ContractError::InvalidInput);
+        let (env, _admin, policyholder, token, contract_id) = setup();
+        env.as_contract(&contract_id, || {
+            // coverage_amount <= 199 results in premium = 0 due to integer division
+            // 199 * 50 / 10_000 = 0
+            let coverage = 199i128;
+            let err = purchase_policy(&env, &policyholder, 1, &token, coverage).unwrap_err();
+            assert_eq!(err, ContractError::InvalidInput);
+        });
     }
 
     #[test]
     fn test_claim_exceeding_coverage_is_capped() {
-        let (env, admin, policyholder, token) = setup();
+        let (env, admin, policyholder, token, contract_id) = setup();
         let coverage = 1_000_000i128;
-        purchase_policy(&env, &policyholder, 1, &token, coverage).unwrap();
+        env.as_contract(&contract_id, || {
+            purchase_policy(&env, &policyholder, 1, &token, coverage).unwrap();
+        });
 
         // Mint extra into pool so pool isn't the bottleneck
         let stellar_asset = StellarAssetClient::new(&env, &token);
-        stellar_asset.mint(&env.current_contract_address(), &2_000_000);
-        Storage::set_insurance_pool(&env, &token, 2_000_000);
+        stellar_asset.mint(&contract_id, &2_000_000);
+        env.as_contract(&contract_id, || {
+            Storage::set_insurance_pool(&env, &token, 2_000_000);
+        });
 
         let reason = String::from_str(&env, "bug");
-        let claim_id = file_claim(&env, &policyholder, 1, 2_000_000, reason).unwrap();
-        approve_claim(&env, &admin, claim_id, 2_000_000).unwrap();
+        let claim_id = env.as_contract(&contract_id, || {
+            file_claim(&env, &policyholder, 1, 2_000_000, reason).unwrap()
+        });
+        env.as_contract(&contract_id, || {
+            approve_claim(&env, &admin, claim_id, 2_000_000).unwrap();
+        });
 
-        let claim = get_claim(&env, claim_id).unwrap();
+        let claim = env.as_contract(&contract_id, || get_claim(&env, claim_id).unwrap());
         // Capped at coverage_amount = 1_000_000
         assert_eq!(claim.payout_amount, Some(1_000_000));
     }
 
     #[test]
     fn test_pool_insufficient_payout_is_capped() {
-        let (env, admin, policyholder, token) = setup();
-        purchase_policy(&env, &policyholder, 1, &token, 1_000_000).unwrap();
+        let (env, admin, policyholder, token, contract_id) = setup();
+        env.as_contract(&contract_id, || {
+            purchase_policy(&env, &policyholder, 1, &token, 1_000_000).unwrap();
+        });
         // Pool currently equals the premium (5_000). Claim for full coverage.
         let reason = String::from_str(&env, "issue");
-        let claim_id = file_claim(&env, &policyholder, 1, 1_000_000, reason).unwrap();
-        approve_claim(&env, &admin, claim_id, 1_000_000).unwrap();
-        let claim = get_claim(&env, claim_id).unwrap();
+        let claim_id = env.as_contract(&contract_id, || {
+            file_claim(&env, &policyholder, 1, 1_000_000, reason).unwrap()
+        });
+        env.as_contract(&contract_id, || {
+            approve_claim(&env, &admin, claim_id, 1_000_000).unwrap();
+        });
+        let claim = env.as_contract(&contract_id, || get_claim(&env, claim_id).unwrap());
         // Capped at pool balance = 5_000
         assert_eq!(claim.payout_amount, Some(5_000));
     }
 
     #[test]
     fn test_expired_policy_claim_rejected() {
-        let (env, _admin, policyholder, token) = setup();
-        purchase_policy(&env, &policyholder, 1, &token, 1_000_000).unwrap();
+        let (env, _admin, policyholder, token, contract_id) = setup();
+        env.as_contract(&contract_id, || {
+            purchase_policy(&env, &policyholder, 1, &token, 1_000_000).unwrap();
+        });
         // Advance time past policy expiry
         env.ledger().with_mut(|li| {
             li.timestamp = li.timestamp + DEFAULT_INSURANCE_DURATION_LEDGERS as u64 + 1;
         });
         let reason = String::from_str(&env, "late");
-        let err = file_claim(&env, &policyholder, 1, 500_000, reason).unwrap_err();
-        assert_eq!(err, ContractError::PolicyExpired);
+        env.as_contract(&contract_id, || {
+            let err = file_claim(&env, &policyholder, 1, 500_000, reason).unwrap_err();
+            assert_eq!(err, ContractError::PolicyExpired);
+        });
     }
 
     #[test]
     fn test_cumulative_payouts_capped_at_coverage() {
-        let (env, admin, policyholder, token) = setup();
+        let (env, admin, policyholder, token, contract_id) = setup();
         let coverage = 1_000_000i128;
-        purchase_policy(&env, &policyholder, 1, &token, coverage).unwrap();
+        env.as_contract(&contract_id, || {
+            purchase_policy(&env, &policyholder, 1, &token, coverage).unwrap();
+        });
 
         // Mint extra into pool so pool isn't the bottleneck
         let stellar_asset = StellarAssetClient::new(&env, &token);
-        stellar_asset.mint(&env.current_contract_address(), &2_000_000);
-        Storage::set_insurance_pool(&env, &token, 2_000_000);
+        stellar_asset.mint(&contract_id, &2_000_000);
+        env.as_contract(&contract_id, || {
+            Storage::set_insurance_pool(&env, &token, 2_000_000);
+        });
 
         // First claim for 600,000 (within coverage)
         let reason1 = String::from_str(&env, "first incident");
-        let claim_id1 = file_claim(&env, &policyholder, 1, 600_000, reason1).unwrap();
-        approve_claim(&env, &admin, claim_id1, 600_000).unwrap();
-        let claim1 = get_claim(&env, claim_id1).unwrap();
+        let claim_id1 = env.as_contract(&contract_id, || {
+            file_claim(&env, &policyholder, 1, 600_000, reason1).unwrap()
+        });
+        env.as_contract(&contract_id, || {
+            approve_claim(&env, &admin, claim_id1, 600_000).unwrap();
+        });
+        let claim1 = env.as_contract(&contract_id, || get_claim(&env, claim_id1).unwrap());
         assert_eq!(claim1.payout_amount, Some(600_000));
 
-        let policy = get_policy(&env, 1).unwrap();
+        let policy = env.as_contract(&contract_id, || get_policy(&env, 1).unwrap());
         assert_eq!(policy.total_paid_out, 600_000);
 
         // Second claim for 600,000 (would exceed coverage)
         // Should only pay remaining 400,000
         let reason2 = String::from_str(&env, "second incident");
-        let claim_id2 = file_claim(&env, &policyholder, 1, 600_000, reason2).unwrap();
-        approve_claim(&env, &admin, claim_id2, 600_000).unwrap();
-        let claim2 = get_claim(&env, claim_id2).unwrap();
+        let claim_id2 = env.as_contract(&contract_id, || {
+            file_claim(&env, &policyholder, 1, 600_000, reason2).unwrap()
+        });
+        env.as_contract(&contract_id, || {
+            approve_claim(&env, &admin, claim_id2, 600_000).unwrap();
+        });
+        let claim2 = env.as_contract(&contract_id, || get_claim(&env, claim_id2).unwrap());
         assert_eq!(claim2.payout_amount, Some(400_000));
 
-        let policy = get_policy(&env, 1).unwrap();
+        let policy = env.as_contract(&contract_id, || get_policy(&env, 1).unwrap());
         assert_eq!(policy.total_paid_out, 1_000_000);
 
         // Third claim should fail since coverage is exhausted
         let reason3 = String::from_str(&env, "third incident");
-        let claim_id3 = file_claim(&env, &policyholder, 1, 100_000, reason3).unwrap();
-        let err = approve_claim(&env, &admin, claim_id3, 100_000).unwrap_err();
-        assert_eq!(err, ContractError::InsufficientPoolBalance);
+        let claim_id3 = env.as_contract(&contract_id, || {
+            file_claim(&env, &policyholder, 1, 100_000, reason3).unwrap()
+        });
+        env.as_contract(&contract_id, || {
+            let err = approve_claim(&env, &admin, claim_id3, 100_000).unwrap_err();
+            assert_eq!(err, ContractError::InsufficientPoolBalance);
+        });
     }
 
     #[test]
     fn test_purchase_policy_rejects_nonexistent_grant() {
-        let (env, _admin, policyholder, token) = setup();
-        let err = purchase_policy(&env, &policyholder, 999, &token, 1_000_000).unwrap_err();
-        assert_eq!(err, ContractError::GrantNotFound);
+        let (env, _admin, policyholder, token, contract_id) = setup();
+        env.as_contract(&contract_id, || {
+            let err = purchase_policy(&env, &policyholder, 999, &token, 1_000_000).unwrap_err();
+            assert_eq!(err, ContractError::GrantNotFound);
+        });
     }
 
     #[test]
     fn test_file_claim_rejects_nonexistent_grant() {
-        let (env, _admin, policyholder, token) = setup();
-        purchase_policy(&env, &policyholder, 1, &token, 1_000_000).unwrap();
+        let (env, _admin, policyholder, token, contract_id) = setup();
+        env.as_contract(&contract_id, || {
+            purchase_policy(&env, &policyholder, 1, &token, 1_000_000).unwrap();
+        });
         // grant_id 999 was never created.
         let reason = String::from_str(&env, "no grant");
-        let err = file_claim(&env, &policyholder, 999, 500_000, reason).unwrap_err();
-        assert_eq!(err, ContractError::GrantNotFound);
+        env.as_contract(&contract_id, || {
+            let err = file_claim(&env, &policyholder, 999, 500_000, reason).unwrap_err();
+            assert_eq!(err, ContractError::GrantNotFound);
+        });
     }
 
     #[test]
     fn test_deactivate_policy_by_admin() {
-        let (env, admin, policyholder, token) = setup();
-        purchase_policy(&env, &policyholder, 1, &token, 1_000_000).unwrap();
+        let (env, admin, policyholder, token, contract_id) = setup();
+        env.as_contract(&contract_id, || {
+            purchase_policy(&env, &policyholder, 1, &token, 1_000_000).unwrap();
+        });
 
-        deactivate_policy(&env, &admin, 1).unwrap();
+        env.as_contract(&contract_id, || {
+            deactivate_policy(&env, &admin, 1).unwrap();
+        });
 
-        let policy = get_policy(&env, 1).unwrap();
+        let policy = env.as_contract(&contract_id, || get_policy(&env, 1).unwrap());
         assert!(!policy.active);
 
         let reason = String::from_str(&env, "late");
-        let err = file_claim(&env, &policyholder, 1, 500_000, reason).unwrap_err();
-        assert_eq!(err, ContractError::PolicyInactive);
+        env.as_contract(&contract_id, || {
+            let err = file_claim(&env, &policyholder, 1, 500_000, reason).unwrap_err();
+            assert_eq!(err, ContractError::PolicyInactive);
+        });
     }
 
     #[test]
     fn test_deactivate_policy_requires_admin() {
-        let (env, _admin, policyholder, token) = setup();
-        purchase_policy(&env, &policyholder, 1, &token, 1_000_000).unwrap();
+        let (env, _admin, policyholder, token, contract_id) = setup();
+        env.as_contract(&contract_id, || {
+            purchase_policy(&env, &policyholder, 1, &token, 1_000_000).unwrap();
 
-        let stranger = Address::generate(&env);
-        let err = deactivate_policy(&env, &stranger, 1).unwrap_err();
-        assert_eq!(err, ContractError::Unauthorized);
+            let stranger = Address::generate(&env);
+            let err = deactivate_policy(&env, &stranger, 1).unwrap_err();
+            assert_eq!(err, ContractError::Unauthorized);
+        });
     }
 
     #[test]
     fn test_deactivate_policy_not_found() {
-        let (env, admin, _policyholder, _token) = setup();
-        let err = deactivate_policy(&env, &admin, 999).unwrap_err();
-        assert_eq!(err, ContractError::PolicyNotFound);
+        let (env, admin, _policyholder, _token, contract_id) = setup();
+        env.as_contract(&contract_id, || {
+            let err = deactivate_policy(&env, &admin, 999).unwrap_err();
+            assert_eq!(err, ContractError::PolicyNotFound);
+        });
     }
 }

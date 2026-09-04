@@ -228,28 +228,37 @@ mod tests {
     #[test]
     fn test_category_stats_reads_tagged_grants() {
         let env = Env::default();
-        env.mock_all_auths();
+        let contract_id = env.register(crate::StellarGrantsContract, ());
+        env.mock_all_auths_allowing_non_root_auth();
 
         let admin = Address::generate(&env);
-        Storage::set_global_admin(&env, &admin);
         let owner = Address::generate(&env);
 
-        let cat_id = crate::grant_tags::create_category(
-            &env,
-            &admin,
-            String::from_str(&env, "Infrastructure"),
-            Vec::new(&env),
-        )
-        .unwrap();
+        let cat_id = env.as_contract(&contract_id, || {
+            Storage::set_global_admin(&env, &admin);
+            crate::grant_tags::create_category(
+                &env,
+                &admin,
+                String::from_str(&env, "Infrastructure"),
+                Vec::new(&env),
+            )
+            .unwrap()
+        });
 
-        setup_grant(&env, 1, &owner, GrantStatus::Active, 1000);
-        setup_grant(&env, 2, &owner, GrantStatus::Completed, 2000);
+        env.as_contract(&contract_id, || {
+            setup_grant(&env, 1, &owner, GrantStatus::Active, 1000);
+            setup_grant(&env, 2, &owner, GrantStatus::Completed, 2000);
+        });
 
         let no_tags = Vec::new(&env);
-        crate::grant_tags::tag_grant(&env, &owner, 1, Some(cat_id), None, no_tags.clone()).unwrap();
-        crate::grant_tags::tag_grant(&env, &owner, 2, Some(cat_id), None, no_tags).unwrap();
+        env.as_contract(&contract_id, || {
+            crate::grant_tags::tag_grant(&env, &owner, 1, Some(cat_id), None, no_tags.clone()).unwrap();
+        });
+        env.as_contract(&contract_id, || {
+            crate::grant_tags::tag_grant(&env, &owner, 2, Some(cat_id), None, no_tags).unwrap();
+        });
 
-        let stats = category_stats(&env, cat_id);
+        let stats = env.as_contract(&contract_id, || category_stats(&env, cat_id));
         assert_eq!(stats.total_grants, 2);
         assert_eq!(stats.completed_grants, 1);
         assert_eq!(stats.total_funded, 3000);
@@ -262,80 +271,85 @@ mod tests {
     #[test]
     fn test_avg_completion_ledgers_computed_correctly() {
         let env = Env::default();
-        env.mock_all_auths();
+        let contract_id = env.register(crate::StellarGrantsContract, ());
+        env.mock_all_auths_allowing_non_root_auth();
 
         let admin = Address::generate(&env);
-        Storage::set_global_admin(&env, &admin);
         let owner = Address::generate(&env);
 
-        let cat_id = crate::grant_tags::create_category(
-            &env,
-            &admin,
-            String::from_str(&env, "Infrastructure"),
-            Vec::new(&env),
-        )
-        .unwrap();
+        let cat_id = env.as_contract(&contract_id, || {
+            Storage::set_global_admin(&env, &admin);
+            crate::grant_tags::create_category(
+                &env,
+                &admin,
+                String::from_str(&env, "Infrastructure"),
+                Vec::new(&env),
+            )
+            .unwrap()
+        });
 
-        // Create a grant with timestamp 100
-        let grant = Grant {
-            id: 1,
-            owner: owner.clone(),
-            title: String::from_str(&env, "Grant"),
-            description: String::from_str(&env, "Desc"),
-            token: Address::generate(&env),
-            status: GrantStatus::Completed,
-            total_amount: 1000,
-            milestone_amount: 500,
-            reviewers: Vec::new(&env),
-            total_milestones: 2,
-            milestones_paid_out: 0,
-            escrow_balance: 1000,
-            funders: Vec::new(&env),
-            reason: None,
-            timestamp: 100,
-            require_compliance: None,
-        };
-        Storage::set_grant(&env, 1, &grant);
+        env.as_contract(&contract_id, || {
+            // Create a grant with timestamp 100
+            let grant = Grant {
+                id: 1,
+                owner: owner.clone(),
+                title: String::from_str(&env, "Grant"),
+                description: String::from_str(&env, "Desc"),
+                token: Address::generate(&env),
+                status: GrantStatus::Completed,
+                total_amount: 1000,
+                milestone_amount: 500,
+                reviewers: Vec::new(&env),
+                total_milestones: 2,
+                milestones_paid_out: 0,
+                escrow_balance: 1000,
+                funders: Vec::new(&env),
+                reason: None,
+                timestamp: 100,
+                require_compliance: None,
+            };
+            Storage::set_grant(&env, 1, &grant);
 
-        // Create milestones with status_updated_at timestamps
-        let milestone0 = Milestone {
-            idx: 0,
-            description: String::from_str(&env, "M1"),
-            amount: 500,
-            state: MilestoneState::Paid,
-            votes: Map::new(&env),
-            approvals: 0,
-            rejections: 0,
-            reasons: Map::new(&env),
-            status_updated_at: 200,
-            proof_url: None,
-            submission_timestamp: 150,
-            deadline: None,
-            reviewer_count_snapshot: 0,
-        };
-        Storage::set_milestone(&env, 1, 0, &milestone0);
+            // Create milestones with status_updated_at timestamps
+            let milestone0 = Milestone {
+                idx: 0,
+                description: String::from_str(&env, "M1"),
+                amount: 500,
+                state: MilestoneState::Paid,
+                votes: Map::new(&env),
+                approvals: 0,
+                rejections: 0,
+                reasons: Map::new(&env),
+                status_updated_at: 200,
+                proof_url: None,
+                submission_timestamp: 150,
+                deadline: None,
+                reviewer_count_snapshot: 0,
+            };
+            Storage::set_milestone(&env, 1, 0, &milestone0);
 
-        let milestone1 = Milestone {
-            idx: 1,
-            description: String::from_str(&env, "M2"),
-            amount: 500,
-            state: MilestoneState::Paid,
-            votes: Map::new(&env),
-            approvals: 0,
-            rejections: 0,
-            reasons: Map::new(&env),
-            status_updated_at: 400, // Last milestone completed at 400
-            proof_url: None,
-            submission_timestamp: 300,
-            deadline: None,
-            reviewer_count_snapshot: 0,
-        };
-        Storage::set_milestone(&env, 1, 1, &milestone1);
+            let milestone1 = Milestone {
+                idx: 1,
+                description: String::from_str(&env, "M2"),
+                amount: 500,
+                state: MilestoneState::Paid,
+                votes: Map::new(&env),
+                approvals: 0,
+                rejections: 0,
+                reasons: Map::new(&env),
+                status_updated_at: 400, // Last milestone completed at 400
+                proof_url: None,
+                submission_timestamp: 300,
+                deadline: None,
+                reviewer_count_snapshot: 0,
+            };
+            Storage::set_milestone(&env, 1, 1, &milestone1);
 
-        let no_tags = Vec::new(&env);
-        crate::grant_tags::tag_grant(&env, &owner, 1, Some(cat_id), None, no_tags).unwrap();
+            let no_tags = Vec::new(&env);
+            crate::grant_tags::tag_grant(&env, &owner, 1, Some(cat_id), None, no_tags).unwrap();
+        });
 
-        let stats = category_stats(&env, cat_id);
+        let stats = env.as_contract(&contract_id, || category_stats(&env, cat_id));
         // Duration = 400 (last milestone status_updated_at) - 100 (grant timestamp) = 300
         assert_eq!(stats.avg_completion_ledgers, 300);
     }
@@ -347,15 +361,18 @@ mod tests {
     #[test]
     fn test_stale_snapshot_triggers_rebuild() {
         let env = Env::default();
+        let contract_id = env.register(crate::StellarGrantsContract, ());
 
-        // Seed a window so build_snapshot has something to compute against.
-        record(&env, Symbol::new(&env, "milestone_completion_time"), 100);
-        record(&env, Symbol::new(&env, "reviewer_turnaround"), 50);
-        record(&env, Symbol::new(&env, "grant_success"), 1);
+        env.as_contract(&contract_id, || {
+            // Seed a window so build_snapshot has something to compute against.
+            record(&env, Symbol::new(&env, "milestone_completion_time"), 100);
+            record(&env, Symbol::new(&env, "reviewer_turnaround"), 50);
+            record(&env, Symbol::new(&env, "grant_success"), 1);
+        });
 
         // Build at ledger 10.
         let original_ledger = env.ledger().sequence();
-        let snap1 = build_snapshot(&env);
+        let snap1 = env.as_contract(&contract_id, || build_snapshot(&env));
         assert_eq!(snap1.captured_at_ledger, original_ledger);
 
         // Advance the ledger past ANALYTICS_SNAPSHOT_STALENESS_LEDGERS (1000).
@@ -364,7 +381,7 @@ mod tests {
         });
 
         // Re-build — captured_at_ledger must follow the new ledger.
-        let snap2 = build_snapshot(&env);
+        let snap2 = env.as_contract(&contract_id, || build_snapshot(&env));
         assert_eq!(
             snap2.captured_at_ledger,
             original_ledger + constants::ANALYTICS_SNAPSHOT_STALENESS_LEDGERS + 1
@@ -375,7 +392,7 @@ mod tests {
         );
 
         // And the get_snapshot path must notice the staleness.
-        let fetched = get_snapshot(&env).expect("snapshot is cached");
+        let fetched = env.as_contract(&contract_id, || get_snapshot(&env).expect("snapshot is cached"));
         assert_eq!(fetched.captured_at_ledger, snap2.captured_at_ledger);
         assert!(
             fetched.snapshot_at >= snap1.snapshot_at,

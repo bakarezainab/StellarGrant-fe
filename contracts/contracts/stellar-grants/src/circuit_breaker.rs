@@ -206,6 +206,17 @@ mod tests {
         let admin = Address::generate(env);
         let client = StellarGrantsContractClient::new(env, &contract_id);
         client.set_global_admin(&admin, &admin);
+        env.as_contract(&contract_id, || {
+            let assignment = crate::types::RoleAssignment {
+                holder: admin.clone(),
+                role: Role::SuperAdmin,
+                granted_by: admin.clone(),
+                granted_at: env.ledger().timestamp(),
+                expires_at: None,
+                is_active: true,
+            };
+            Storage::set_role_assignment(env, &admin, &Role::SuperAdmin, &assignment);
+        });
         (contract_id, admin)
     }
 

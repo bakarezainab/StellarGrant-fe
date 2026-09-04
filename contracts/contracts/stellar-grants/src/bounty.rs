@@ -355,7 +355,7 @@ mod tests {
     #[test]
     fn test_submit_solution_limit_exceeded() {
         let env = Env::default();
-        env.mock_all_auths();
+        env.mock_all_auths_allowing_non_root_auth();
         let contract_id = env.register(crate::StellarGrantsContract, ());
         let mut id = 0u64;
         with_contract_id(&env, &contract_id, || {
@@ -364,13 +364,15 @@ mod tests {
             id = make_bounty(&env, &owner, &token);
         });
 
-        with_contract_id(&env, &contract_id, || {
-            for _ in 0..crate::constants::MAX_BOUNTY_SUBMISSIONS {
-                let submitter = Address::generate(&env);
+        for _ in 0..crate::constants::MAX_BOUNTY_SUBMISSIONS {
+            let submitter = Address::generate(&env);
+            with_contract_id(&env, &contract_id, || {
                 submit_solution(&env, id, &submitter, String::from_str(&env, "proof")).unwrap();
-            }
+            });
+        }
 
-            let late_submitter = Address::generate(&env);
+        let late_submitter = Address::generate(&env);
+        with_contract_id(&env, &contract_id, || {
             let result =
                 submit_solution(&env, id, &late_submitter, String::from_str(&env, "proof"));
             assert_eq!(result, Err(ContractError::BountySubmissionLimitExceeded));

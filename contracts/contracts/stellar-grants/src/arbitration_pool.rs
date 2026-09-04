@@ -461,7 +461,7 @@ mod tests {
     /// Create env + contract + token, mint tokens to a list of arbiters.
     fn setup(arbiter_count: usize) -> (Env, Address, Address, Vec<Address>) {
         let env = Env::default();
-        env.mock_all_auths();
+        env.mock_all_auths_allowing_non_root_auth();
 
         let token_admin = Address::generate(&env);
         let token_contract = env
@@ -656,6 +656,8 @@ mod tests {
 
         env.as_contract(&cid, || {
             cast_arbiter_vote(&env, &voter, case_id, true, 50).unwrap();
+        });
+        env.as_contract(&cid, || {
             let res = cast_arbiter_vote(&env, &voter, case_id, false, 50);
             assert_eq!(res, Err(ContractError::AlreadyVoted));
         });
@@ -669,6 +671,8 @@ mod tests {
         env.as_contract(&cid, || {
             let res = cast_arbiter_vote(&env, &panel.get(0).unwrap(), case_id, true, 0);
             assert_eq!(res, Err(ContractError::InvalidInput));
+        });
+        env.as_contract(&cid, || {
             let res = cast_arbiter_vote(&env, &panel.get(0).unwrap(), case_id, true, 101);
             assert_eq!(res, Err(ContractError::InvalidInput));
         });
